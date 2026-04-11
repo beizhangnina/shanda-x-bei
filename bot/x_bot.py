@@ -68,22 +68,25 @@ def _login_if_needed():
 
 def _parse_age_days(time_label: str) -> float:
     """Return approximate age in days from X timestamp label. Returns 999 if unparseable."""
-    label = time_label.strip()
-    if label == "just now":
+    label = time_label.strip().lower()
+    if "just now" in label:
         return 0.0
-    m = re.match(r'^(\d+)m$', label)
-    if m:
-        return int(m.group(1)) / 1440.0
-    m = re.match(r'^(\d+)h$', label)
+    # "12 hours ago", "12h"
+    m = re.match(r'^(\d+)\s*h(?:ours?)?(?:\s+ago)?$', label)
     if m:
         return int(m.group(1)) / 24.0
-    m = re.match(r'^(\d+)d$', label)
+    # "45 minutes ago", "45m"
+    m = re.match(r'^(\d+)\s*m(?:in(?:utes?)?)?(?:\s+ago)?$', label)
+    if m:
+        return int(m.group(1)) / 1440.0
+    # "2 days ago", "2d"
+    m = re.match(r'^(\d+)\s*d(?:ays?)?(?:\s+ago)?$', label)
     if m:
         return float(m.group(1))
     # Month-day format (e.g. "Apr 8") — calculate actual age
     try:
         today = date.today()
-        dt = datetime.strptime(f"{label} {today.year}", "%b %d %Y").date()
+        dt = datetime.strptime(f"{time_label.strip()} {today.year}", "%b %d %Y").date()
         if dt > today:  # Handle year boundary
             dt = dt.replace(year=today.year - 1)
         return float((today - dt).days)
@@ -108,9 +111,16 @@ def _search_posts(query: str, max_age_days: int = 3) -> List[dict]:
         next_pos = article_positions[i + 1][0] if i + 1 < len(article_positions) else len(tree)
         block = tree[pos:next_pos]
 
-        # Time link: matches relative (3h, 2d) AND absolute (Apr 8) formats
+        # X shows time as: "12 hours ago", "45 minutes ago", "2 days ago",
+        # short forms "12h"/"2d", or absolute "Apr 8"
         time_match = re.search(
-            r'\[(\d+-\d+)\] link: (just now|\d+[hmd]|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+)',
+            r'\[(\d+-\d+)\] link: ('
+            r'just now'
+            r'|\d+\s*(?:hours?|h)(?:\s+ago)?'
+            r'|\d+\s*(?:minutes?|m(?:in)?)(?:\s+ago)?'
+            r'|\d+\s*(?:days?|d)(?:\s+ago)?'
+            r'|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+'
+            r')',
             block
         )
         if not time_match:
@@ -302,8 +312,15 @@ def repost_team_accounts(config: dict) -> dict:
                     continue
 
                 # Time ref — only accept posts within 3 days (relative or absolute date)
+                # X uses verbose format: "12 hours ago", "45 minutes ago", "2 days ago", or "Apr 8"
                 time_match = re.search(
-                    r'\[(\d+-\d+)\] link: (just now|\d+[hmd]|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+)',
+                    r'\[(\d+-\d+)\] link: ('
+                    r'just now'
+                    r'|\d+\s*(?:hours?|h)(?:\s+ago)?'
+                    r'|\d+\s*(?:minutes?|m(?:in)?)(?:\s+ago)?'
+                    r'|\d+\s*(?:days?|d)(?:\s+ago)?'
+                    r'|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+'
+                    r')',
                     block
                 )
                 if time_match:
@@ -314,56 +331,37 @@ def repost_team_accounts(config: dict) -> dict:
                     continue
                 time_ref = time_match.group(1)
 
+                # Find repost button IN the article block (it's on the profile page itself)
+                repost_btns = re.findall(r'\[(\d+-\d+)\] button: (?:\d+ reposts\. )?Repost\b', block)
+                already_rt = re.search(r'button: Undo repost', block)
+                if already_rt or not repost_btns:
+                    summary["skipped"] += 1
+                    continue
+
                 # Claude filter
                 decision = filter_team_content(snippet)
                 if decision != "REPOST":
                     summary["skipped"] += 1
                     continue
 
-                # Open tweet — poll until /status/ URL appears (up to 8s)
-                prev_url = B.get_url()
-                real_url = _click_and_wait_for_tweet(time_ref, prev_url)
-                if not real_url or "/status/" not in real_url:
-                    B.back()
-                    B.wait_seconds(2)
-                    summary["errors"] += 1
-                    continue
-
-                if already_replied(real_url):
-                    B.back()
-                    B.wait_seconds(2)
-                    summary["skipped"] += 1
-                    continue
-
-                # Find repost button — label is "N reposts. Repost" or just "Repost"
-                tree2 = B.snapshot()
-                repost_btns = re.findall(r'\[(\d+-\d+)\] button: (?:\d+ reposts\. )?Repost\b', tree2)
-                # Skip if already retweeted (button shows "Undo repost")
-                already_rt = re.search(r'button: Undo repost', tree2)
-                if already_rt or not repost_btns:
-                    B.back()
-                    B.wait_seconds(2)
-                    summary["skipped"] += 1
-                    continue
-
+                # Repost directly from profile page — no navigation needed
                 B.click(repost_btns[0])
                 B.wait_seconds(1)
 
                 # Confirm repost in popup
-                tree3 = B.snapshot()
-                confirm_btns = re.findall(r'\[(\d+-\d+)\] menuitem: Repost', tree3)
+                tree2 = B.snapshot()
+                confirm_btns = re.findall(r'\[(\d+-\d+)\] menuitem: Repost', tree2)
                 if confirm_btns:
                     B.click(confirm_btns[0])
                     B.wait_seconds(2)
-                    log_reply("x", real_url, account, snippet, f"[REPOST from {account}]", None, "posted")
+                    # Use handle+article index as logging key (dedup via "Undo repost" check above)
+                    log_key = f"https://x.com/{handle}/repost/{i}"
+                    log_reply("x", log_key, account, snippet, f"[REPOST from {account}]", None, "posted")
                     summary["reposts"] += 1
-                    logger.info(f"Flow1: reposted from {account} — {real_url}")
+                    logger.info(f"Flow1: reposted from {account} — article {i} ({time_match.group(2)})")
                     time.sleep(delay)
                 else:
                     summary["errors"] += 1
-
-                B.back()
-                B.wait_seconds(2)
 
         except Exception as e:
             logger.error(f"Flow1: error on {account}: {e}")

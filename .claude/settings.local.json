@@ -13,7 +13,25 @@
       "Bash(cp /tmp/social-bot-ref/requirements.txt /Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/)",
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git worktree:*)",
+      "Bash(python3:*)",
+      "Bash(bash install.sh)",
+      "Bash(pip3 install:*)",
+      "Bash(browse --version)",
+      "Bash(npm --version)",
+      "Bash(browse --help)",
+      "Bash(browse env:*)",
+      "Bash(browse status:*)",
+      "Bash(curl -s http://127.0.0.1:9222/json)",
+      "Bash(browse start:*)",
+      "Bash(curl -s \"http://127.0.0.1:9223/json\")",
+      "Bash(curl -s \"http://127.0.0.1:9223/json/version\")",
+      "Bash(sqlite3:*)",
+      "Bash(git:*)",
+      "Bash(kill -0 13939)",
+      "Bash(browse --ws 9223 --help)"
     ]
   }
 }
