@@ -14,6 +14,7 @@ import sys
 import json
 import logging
 import time
+import random
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -59,7 +60,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--flow", type=int, choices=[1, 2, 3, 4],
                         help="Run a specific flow only (1=team repost, 2=DR repost, 3=comment queue, 4=follow)")
+    parser.add_argument("--no-jitter", action="store_true",
+                        help="Skip startup jitter (for testing)")
     args = parser.parse_args()
+
+    # Random startup jitter (0–20 min) to avoid mechanical fixed-time patterns.
+    # Skipped when running a specific --flow or --no-jitter for manual testing.
+    if not args.flow and not args.no_jitter:
+        jitter = random.randint(0, 1200)
+        logger.info(f"Startup jitter: sleeping {jitter}s before run")
+        time.sleep(jitter)
 
     init_db()
     import_follow_list_if_needed()

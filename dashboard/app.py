@@ -31,32 +31,30 @@ def api_overview():
     yesterday = (date.today() - timedelta(days=1)).isoformat()
 
     stats = get_stats(days=30)
-    today_stats  = [s for s in stats if s["day"] == today]
-    ytd_stats    = [s for s in stats if s["day"] == yesterday]
+    today_stats = [s for s in stats if s["day"] == today]
+    ytd_stats   = [s for s in stats if s["day"] == yesterday]
 
     def sum_field(rows, field):
         return sum(r.get(field, 0) for r in rows)
 
-    x_today     = next((s for s in today_stats if s["platform"] == "x"), {})
-    r_today     = next((s for s in today_stats if s["platform"] == "reddit"), {})
-    x_ytd       = next((s for s in ytd_stats  if s["platform"] == "x"), {})
-    r_ytd       = next((s for s in ytd_stats  if s["platform"] == "reddit"), {})
+    x_today = next((s for s in today_stats if s["platform"] == "x"), {})
+    x_ytd   = next((s for s in ytd_stats  if s["platform"] == "x"), {})
+
+    from bot.db import get_follow_stats
+    follow_stats = get_follow_stats()
 
     return jsonify({
         "today": {
-            "x_posted":       x_today.get("posted", 0),
-            "x_target":       CONFIG["x"]["daily_target"],
-            "reddit_posted":  r_today.get("posted", 0),
-            "reddit_target":  CONFIG["reddit"]["daily_target"],
-            "total_posted":   x_today.get("posted", 0) + r_today.get("posted", 0),
+            "x_posted":     x_today.get("posted", 0),
+            "x_target":     CONFIG["x"]["max_daily_reposts"],
+            "total_posted": x_today.get("posted", 0),
         },
         "yesterday": {
-            "x_posted":      x_ytd.get("posted", 0),
-            "reddit_posted": r_ytd.get("posted", 0),
+            "x_posted": x_ytd.get("posted", 0),
         },
         "total_all_time": sum_field(stats, "posted"),
-        "solvea_mentions": _count_product("Solvea"),
-        "voc_mentions":    _count_product("VOC.ai"),
+        "follow_stats": follow_stats,
+        "miromind_mentions": _count_miromind_mentions(),
     })
 
 
@@ -116,12 +114,11 @@ def api_review_reject(review_id):
     return jsonify({"status": "rejected", "id": review_id})
 
 
-def _count_product(name: str) -> int:
+def _count_miromind_mentions() -> int:
     from bot.db import get_conn
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM replies WHERE product=? AND status='posted'",
-            (name,)
+            "SELECT COUNT(*) as cnt FROM replies WHERE reply_text LIKE '%MiroMind%' AND status='posted'"
         ).fetchone()
         return row["cnt"] if row else 0
 

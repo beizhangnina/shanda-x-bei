@@ -3,7 +3,7 @@
     "username": "@bei_zhang01",
     "max_daily_reposts": 15,
     "max_daily_comments": 10,
-    "max_daily_follows": 15,
+    "max_daily_follows": 30,
     "min_delay_seconds": 300,
     "influencer_follower_threshold": 5000,
     "team_accounts": [

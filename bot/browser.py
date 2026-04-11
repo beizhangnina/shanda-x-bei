@@ -13,8 +13,9 @@ class BrowseError(Exception):
 
 
 def _run(args: str, timeout: int = 30) -> dict:
+    # Always connect to the bei-x dedicated Chrome on port 9223 (persistent profile)
     result = subprocess.run(
-        f"browse {args}",
+        f"browse --ws 9223 {args}",
         shell=True,
         capture_output=True,
         text=True,

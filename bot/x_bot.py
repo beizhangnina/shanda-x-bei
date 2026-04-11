@@ -20,21 +20,32 @@ SEARCH_URL = "https://x.com/search?q={query}&src=typed_query&f=live"
 
 
 def _is_logged_in() -> bool:
+    """Check login by URL — most reliable method."""
+    url = B.get_url()
+    # Logged in: we land on /home or /bei_zhang01 or any feed page
+    # Logged out: redirected to /i/flow/login or /login
+    if not url:
+        return False
+    if "login" in url or "flow" in url or "signup" in url:
+        return False
+    if "x.com" in url and url not in ("https://x.com/", "https://x.com"):
+        return True
+    # On x.com root — check if home feed loaded vs "Happening now" landing
     tree = B.snapshot()
-    return "bei_zhang01" in tree or "Hunter Guo" in tree
+    return "Home timeline" in tree or "bei_zhang01" in tree
 
 
 def _login_if_needed():
-    """Open X and check login. If not logged in, open login page for manual auth."""
-    B.open_url("https://x.com")
-    B.wait_seconds(3)
+    """Navigate to x.com/home — if already logged in we stay, otherwise redirect to login."""
+    B.open_url("https://x.com/home")
+    B.wait_seconds(4)
     if _is_logged_in():
         logger.info("X: already logged in")
         return True
     logger.warning("X: not logged in — opening login page")
     B.open_url(LOGIN_URL)
-    # Wait up to 60s for user to log in (for first-run setup)
-    for _ in range(12):
+    # Wait up to 90s for manual login (first-run setup only)
+    for _ in range(18):
         B.wait_seconds(5)
         if _is_logged_in():
             logger.info("X: login confirmed")
@@ -43,8 +54,26 @@ def _login_if_needed():
     return False
 
 
-def _search_posts(query: str) -> List[dict]:
-    """Search X and return list of {snippet, time_ref} dicts."""
+def _parse_age_days(time_label: str) -> float:
+    """Return approximate age in days from X timestamp label. Returns 999 if unparseable."""
+    label = time_label.strip()
+    if label == "just now":
+        return 0.0
+    m = re.match(r'^(\d+)m$', label)
+    if m:
+        return int(m.group(1)) / 1440.0
+    m = re.match(r'^(\d+)h$', label)
+    if m:
+        return int(m.group(1)) / 24.0
+    m = re.match(r'^(\d+)d$', label)
+    if m:
+        return float(m.group(1))
+    # Month-day format (e.g. "Apr 7") — assume older than 3 days
+    return 999.0
+
+
+def _search_posts(query: str, max_age_days: int = 3) -> List[dict]:
+    """Search X and return list of {snippet, time_ref, age_days} dicts within max_age_days."""
     url = SEARCH_URL.format(query=query.replace(" ", "+"))
     B.open_url(url)
     B.wait_seconds(3)
@@ -52,32 +81,35 @@ def _search_posts(query: str) -> List[dict]:
     posts = []
     tree = B.snapshot()
 
-    # Find article start positions in the full tree
     article_positions = [(m.start(), m.group(1)) for m in
                          re.finditer(r'\[(\d+-\d+)\] article:', tree)]
 
     for i, (pos, article_ref) in enumerate(article_positions[:15]):
-        # Article block ends where next top-level sibling starts
         next_pos = article_positions[i + 1][0] if i + 1 < len(article_positions) else len(tree)
         block = tree[pos:next_pos]
 
-        # Time link: [ref] link: Mar 16  OR  link: 5h  OR  link: just now
+        # Time link: accepts hours, minutes, days, "just now" — NOT bare month-day dates
         time_match = re.search(
-            r'\[(\d+-\d+)\] link: (?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+|\d+[hm]|just now)',
+            r'\[(\d+-\d+)\] link: (just now|\d+[hmd])',
             block
         )
         if not time_match:
             continue
 
         time_ref = time_match.group(1)
+        time_label = time_match.group(2)
+        age_days = _parse_age_days(time_label)
 
-        # Snippet from StaticText nodes (skip very short ones like emojis/counts)
+        if age_days > max_age_days:
+            continue  # Too old
+
         texts = re.findall(r'StaticText: ([^\n]{10,})', block)
         snippet = " ".join(texts[:6])[:350]
 
         posts.append({
             "article_ref": article_ref,
             "time_ref": time_ref,
+            "age_days": age_days,
             "snippet": snippet,
         })
 
@@ -249,11 +281,15 @@ def repost_team_accounts(config: dict) -> dict:
                 if not snippet or len(snippet) < 30:
                     continue
 
-                # Time ref (to click into tweet)
+                # Time ref — only accept posts within 3 days
                 time_match = re.search(
-                    r'\[(\d+-\d+)\] link: (?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+|\d+[hm]|just now)',
+                    r'\[(\d+-\d+)\] link: (just now|\d+[hmd])',
                     block
                 )
+                if time_match:
+                    age = _parse_age_days(time_match.group(2))
+                    if age > 3:
+                        time_match = None  # Too old, skip
                 if not time_match:
                     continue
                 time_ref = time_match.group(1)
@@ -264,10 +300,16 @@ def repost_team_accounts(config: dict) -> dict:
                     summary["skipped"] += 1
                     continue
 
-                # Open tweet to get URL
+                # Open tweet to get URL (wait for navigation to complete)
                 B.click(time_ref)
-                B.wait_seconds(3)
+                B.wait_seconds(4)
                 real_url = B.get_url()
+                # Verify navigation succeeded (URL should be a tweet, not a profile page)
+                if not real_url or "/status/" not in real_url:
+                    B.press("Alt+Left")
+                    B.wait_seconds(2)
+                    summary["errors"] += 1
+                    continue
 
                 if already_replied(real_url):
                     B.press("Alt+Left")
@@ -275,13 +317,15 @@ def repost_team_accounts(config: dict) -> dict:
                     summary["skipped"] += 1
                     continue
 
-                # Find repost button and click it
+                # Find repost button — label is "N reposts. Repost" or just "Repost"
                 tree2 = B.snapshot()
-                repost_btns = re.findall(r'\[(\d+-\d+)\] button: Repost', tree2)
-                if not repost_btns:
+                repost_btns = re.findall(r'\[(\d+-\d+)\] button: (?:\d+ reposts\. )?Repost\b', tree2)
+                # Skip if already retweeted (button shows "Undo repost")
+                already_rt = re.search(r'button: Undo repost', tree2)
+                if already_rt or not repost_btns:
                     B.press("Alt+Left")
                     B.wait_seconds(2)
-                    summary["errors"] += 1
+                    summary["skipped"] += 1
                     continue
 
                 B.click(repost_btns[0])
@@ -347,8 +391,14 @@ def search_and_repost_dr(config: dict) -> dict:
                 continue
 
             B.click(post["time_ref"])
-            B.wait_seconds(3)
+            B.wait_seconds(4)
             real_url = B.get_url()
+
+            # Verify navigation reached a tweet (not still on search page)
+            if not real_url or "/status/" not in real_url:
+                B.press("Alt+Left")
+                B.wait_seconds(2)
+                continue
 
             if already_replied(real_url):
                 B.press("Alt+Left")
@@ -362,8 +412,9 @@ def search_and_repost_dr(config: dict) -> dict:
 
             if summary["reposts"] < max_reposts:
                 tree = B.snapshot()
-                repost_btns = re.findall(r'\[(\d+-\d+)\] button: Repost', tree)
-                if repost_btns:
+                repost_btns = re.findall(r'\[(\d+-\d+)\] button: (?:\d+ reposts\. )?Repost\b', tree)
+                already_rt = re.search(r'button: Undo repost', tree)
+                if repost_btns and not already_rt:
                     B.click(repost_btns[0])
                     B.wait_seconds(1)
                     tree2 = B.snapshot()

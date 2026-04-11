@@ -33,7 +33,6 @@
   .progress-bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: 12px; overflow: hidden; }
   .progress-fill { height: 100%; border-radius: 3px; transition: width .6s ease; }
   .x-fill { background: var(--x-color); }
-  .reddit-fill { background: var(--reddit-color); }
 
   /* Chart */
   .chart-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 28px; }
@@ -93,36 +92,25 @@
   <!-- Stats -->
   <div class="stats">
     <div class="card accent">
-      <div class="label">Total Today</div>
+      <div class="label">Reposts Today</div>
       <div class="value" id="total-today">—</div>
-      <div class="sub" id="total-sub">Loading...</div>
-    </div>
-    <div class="card">
-      <div class="label">X / Twitter</div>
-      <div class="value" id="x-today">—</div>
-      <div class="sub" id="x-sub">target: 20</div>
+      <div class="sub" id="total-sub">yesterday: —</div>
       <div class="progress-bar"><div class="progress-fill x-fill" id="x-prog" style="width:0%"></div></div>
     </div>
     <div class="card">
-      <div class="label">Reddit</div>
-      <div class="value" id="reddit-today">—</div>
-      <div class="sub" id="reddit-sub">target: 10</div>
-      <div class="progress-bar"><div class="progress-fill reddit-fill" id="reddit-prog" style="width:0%"></div></div>
-    </div>
-    <div class="card">
-      <div class="label">Solvea Mentions</div>
-      <div class="value" id="solvea-total">—</div>
-      <div class="sub">all time</div>
-    </div>
-    <div class="card">
-      <div class="label">VOC.ai Mentions</div>
-      <div class="value" id="voc-total">—</div>
-      <div class="sub">all time</div>
-    </div>
-    <div class="card">
-      <div class="label">All Time Replies</div>
+      <div class="label">All-Time Reposts</div>
       <div class="value" id="all-time">—</div>
       <div class="sub">posted</div>
+    </div>
+    <div class="card">
+      <div class="label">MiroMind Mentions</div>
+      <div class="value" id="miromind-total">—</div>
+      <div class="sub">in approved comments</div>
+    </div>
+    <div class="card">
+      <div class="label">Follows · Total</div>
+      <div class="value" id="follow-total">—</div>
+      <div class="sub" id="follow-sub">pending: —</div>
     </div>
   </div>
 
@@ -168,17 +156,14 @@ let chartInstance = null;
 
 async function loadOverview() {
   const d = await fetch('/api/overview').then(r => r.json());
-  document.getElementById('total-today').textContent  = d.today.total_posted;
-  document.getElementById('total-sub').textContent    = `yesterday: ${d.yesterday.x_posted + d.yesterday.reddit_posted}`;
-  document.getElementById('x-today').textContent     = d.today.x_posted;
-  document.getElementById('x-sub').textContent       = `target: ${d.today.x_target}`;
-  document.getElementById('reddit-today').textContent = d.today.reddit_posted;
-  document.getElementById('reddit-sub').textContent  = `target: ${d.today.reddit_target}`;
-  document.getElementById('solvea-total').textContent = d.solvea_mentions;
-  document.getElementById('voc-total').textContent   = d.voc_mentions;
+  document.getElementById('total-today').textContent = d.today.total_posted;
+  document.getElementById('total-sub').textContent   = `yesterday: ${d.yesterday.x_posted}`;
   document.getElementById('all-time').textContent    = d.total_all_time;
-  document.getElementById('x-prog').style.width      = Math.min(100, (d.today.x_posted / d.today.x_target) * 100) + '%';
-  document.getElementById('reddit-prog').style.width = Math.min(100, (d.today.reddit_posted / d.today.reddit_target) * 100) + '%';
+  document.getElementById('miromind-total').textContent = d.miromind_mentions ?? '—';
+  document.getElementById('x-prog').style.width      = Math.min(100, (d.today.x_posted / (d.today.x_target || 15)) * 100) + '%';
+  const fs = d.follow_stats || {};
+  document.getElementById('follow-total').textContent = fs.followed ?? '—';
+  document.getElementById('follow-sub').textContent   = `pending: ${fs.pending ?? '—'}`;
 }
 
 async function loadChart() {
@@ -191,8 +176,7 @@ async function loadChart() {
     data: {
       labels,
       datasets: [
-        { label: 'X/Twitter', data: d.x,      backgroundColor: 'rgba(29,155,240,.7)',  stack: 'a' },
-        { label: 'Reddit',    data: d.reddit,  backgroundColor: 'rgba(255,69,0,.7)',    stack: 'a' },
+        { label: 'X/Twitter', data: d.x, backgroundColor: 'rgba(29,155,240,.7)', stack: 'a' },
       ]
     },
     options: {
