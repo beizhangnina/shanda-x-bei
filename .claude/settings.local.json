@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "mcp__plugin_github_github__get_file_contents",
+      "WebFetch(domain:www.miromind.ai)",
+      "WebFetch(domain:x.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(cp -r /tmp/social-bot-ref/bot /Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/)",
+      "Bash(cp -r /tmp/social-bot-ref/dashboard /Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/)",
+      "Bash(cp -r /tmp/social-bot-ref/launchd /Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/)",
+      "Bash(cp /tmp/social-bot-ref/config.json /Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/)",
+      "Bash(cp /tmp/social-bot-ref/requirements.txt /Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

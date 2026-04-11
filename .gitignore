@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite
+.worktrees/
+venv/
+.venv/
+*.log
+browse_sessions/
