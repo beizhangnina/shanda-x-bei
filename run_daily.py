@@ -62,6 +62,8 @@ def main():
                         help="Run a specific flow only (1=team repost, 2=DR repost, 3=comment queue, 4=follow)")
     parser.add_argument("--no-jitter", action="store_true",
                         help="Skip startup jitter (for testing)")
+    parser.add_argument("--skip-follow", action="store_true",
+                        help="Skip Flow 4 (follow batch) — useful when daily follow limit already hit")
     args = parser.parse_args()
 
     # Random startup jitter (0–20 min) to avoid mechanical fixed-time patterns.
@@ -119,7 +121,7 @@ def main():
             results["flow3"] = {"error": str(e)}
 
     # Flow 4: Follow batch
-    if not args.flow or args.flow == 4:
+    if (not args.flow or args.flow == 4) and not args.skip_follow:
         logger.info("Flow 4: Following queued accounts...")
         try:
             results["flow4"] = x_bot.follow_daily_batch(CONFIG)

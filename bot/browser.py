@@ -82,6 +82,17 @@ def get_url() -> str:
     return data.get("url", "")
 
 
+def get_box(ref_or_selector: str) -> dict | None:
+    """Get bounding box {x, y} of element by accessibility ref ('0-123') or CSS selector."""
+    if re.match(r'^\d+-\d+$', ref_or_selector):
+        data = _run(f"get box @{ref_or_selector}", timeout=5)
+    else:
+        data = _run(f"get box {ref_or_selector}", timeout=5)
+    if isinstance(data, dict) and "x" in data:
+        return {"x": int(data["x"]), "y": int(data["y"])}
+    return None
+
+
 def find_refs(tree: str, pattern: str) -> list[str]:
     """Find element refs matching pattern in the accessibility tree."""
     return re.findall(rf'\[(\d+-\d+)\] {pattern}', tree)

@@ -332,8 +332,9 @@ def repost_team_accounts(config: dict) -> dict:
                 time_ref = time_match.group(1)
 
                 # Find repost button IN the article block (it's on the profile page itself)
-                repost_btns = re.findall(r'\[(\d+-\d+)\] button: (?:\d+ reposts\. )?Repost\b', block)
-                already_rt = re.search(r'button: Undo repost', block)
+                repost_btns = re.findall(r'\[(\d+-\d+)\] button: (?:\d+ reposts?\. )?Repost\b', block)
+                # "Reposted" = already retweeted by us (X shows this instead of "Undo repost" on some pages)
+                already_rt = re.search(r'button: (?:\d+ reposts?\. )?(?:Undo repost|Reposted)\b', block)
                 if already_rt or not repost_btns:
                     summary["skipped"] += 1
                     continue
@@ -344,24 +345,26 @@ def repost_team_accounts(config: dict) -> dict:
                     summary["skipped"] += 1
                     continue
 
-                # Repost directly from profile page — no navigation needed
-                B.click(repost_btns[0])
+                # Coordinate-based click required — X's JS ignores accessibility ref clicks
+                box = B.get_box(repost_btns[0])
+                if not box:
+                    summary["errors"] += 1
+                    continue
+                B.click_xy(box["x"], box["y"])
                 B.wait_seconds(1)
 
-                # Confirm repost in popup
-                tree2 = B.snapshot()
-                confirm_btns = re.findall(r'\[(\d+-\d+)\] menuitem: Repost', tree2)
-                if confirm_btns:
-                    B.click(confirm_btns[0])
-                    B.wait_seconds(2)
-                    # Use handle+article index as logging key (dedup via "Undo repost" check above)
-                    log_key = f"https://x.com/{handle}/repost/{i}"
-                    log_reply("x", log_key, account, snippet, f"[REPOST from {account}]", None, "posted")
-                    summary["reposts"] += 1
-                    logger.info(f"Flow1: reposted from {account} — article {i} ({time_match.group(2)})")
-                    time.sleep(delay)
-                else:
+                # Confirm popup (retweetConfirm is unique when popup is open)
+                confirm_box = B.get_box('[data-testid="retweetConfirm"]')
+                if not confirm_box:
                     summary["errors"] += 1
+                    continue
+                B.click_xy(confirm_box["x"], confirm_box["y"])
+                B.wait_seconds(2)
+                log_key = f"https://x.com/{handle}/repost/{i}"
+                log_reply("x", log_key, account, snippet, f"[REPOST from {account}]", None, "posted")
+                summary["reposts"] += 1
+                logger.info(f"Flow1: reposted from {account} — article {i} ({time_match.group(2)})")
+                time.sleep(delay)
 
         except Exception as e:
             logger.error(f"Flow1: error on {account}: {e}")
@@ -406,11 +409,19 @@ def search_and_repost_dr(config: dict) -> dict:
             if not post.get("time_ref"):
                 continue
 
-            prev_url = B.get_url()
-            real_url = _click_and_wait_for_tweet(post["time_ref"], prev_url)
+            # Navigate to tweet via coordinate click on timestamp
+            real_url = ""
+            nav_box = B.get_box(post["time_ref"])
+            if nav_box:
+                B.click_xy(nav_box["x"], nav_box["y"])
+                for _ in range(8):
+                    B.wait_seconds(1)
+                    url = B.get_url()
+                    if url and "/status/" in url:
+                        real_url = url
+                        break
 
-            # Verify navigation reached a tweet (not still on search page)
-            if not real_url or "/status/" not in real_url:
+            if not real_url:
                 B.back()
                 B.wait_seconds(2)
                 continue
@@ -427,20 +438,22 @@ def search_and_repost_dr(config: dict) -> dict:
 
             if summary["reposts"] < max_reposts:
                 tree = B.snapshot()
-                repost_btns = re.findall(r'\[(\d+-\d+)\] button: (?:\d+ reposts\. )?Repost\b', tree)
-                already_rt = re.search(r'button: Undo repost', tree)
+                repost_btns = re.findall(r'\[(\d+-\d+)\] button: (?:\d+ reposts?\. )?Repost\b', tree)
+                already_rt = re.search(r'button: (?:\d+ reposts?\. )?(?:Undo repost|Reposted)\b', tree)
                 if repost_btns and not already_rt:
-                    B.click(repost_btns[0])
-                    B.wait_seconds(1)
-                    tree2 = B.snapshot()
-                    confirm_btns = re.findall(r'\[(\d+-\d+)\] menuitem: Repost', tree2)
-                    if confirm_btns:
-                        B.click(confirm_btns[0])
-                        B.wait_seconds(2)
-                        log_reply("x", real_url, query, snippet, "[DR REPOST]", None, "posted")
-                        summary["reposts"] += 1
-                        logger.info(f"Flow2: reposted DR content — {real_url}")
-                        time.sleep(delay)
+                    # Coordinate-based click required — X's JS ignores accessibility ref clicks
+                    box = B.get_box('[data-testid="retweet"]')
+                    if box:
+                        B.click_xy(box["x"], box["y"])
+                        B.wait_seconds(1)
+                        confirm_box = B.get_box('[data-testid="retweetConfirm"]')
+                        if confirm_box:
+                            B.click_xy(confirm_box["x"], confirm_box["y"])
+                            B.wait_seconds(2)
+                            log_reply("x", real_url, query, snippet, "[DR REPOST]", None, "posted")
+                            summary["reposts"] += 1
+                            logger.info(f"Flow2: reposted DR content — {real_url}")
+                            time.sleep(delay)
 
             B.back()
             B.wait_seconds(2)
@@ -525,7 +538,13 @@ def follow_daily_batch(config: dict) -> dict:
                 logger.info(f"Flow4: already following or not found — {handle}")
                 continue
 
-            B.click(follow_btns[0])
+            # Coordinate-based click required — X's JS ignores accessibility ref clicks
+            box = B.get_box(follow_btns[0])
+            if not box:
+                summary["failed"] += 1
+                logger.warning(f"Flow4: can't get box for follow button — @{handle}")
+                continue
+            B.click_xy(box["x"], box["y"])
             B.wait_seconds(2)
 
             # Verify

@@ -7,9 +7,12 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>/Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/venv/bin/python3</string>
         <string>/Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/run_daily.py</string>
     </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x</string>
 
     <!-- Run at 10:05 AM every day -->
     <key>StartCalendarInterval</key>
@@ -23,9 +26,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-        <key>ANTHROPIC_API_KEY</key>
-        <string>FILL_IN</string>
+        <string>/Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/node_modules/.bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
 
     <key>StandardOutPath</key>
