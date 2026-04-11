@@ -12,7 +12,7 @@ from flask import Flask, render_template, jsonify
 from flask_cors import CORS
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from bot.db import get_stats, get_recent_replies, get_today_count, init_db
+from bot.db import get_stats, get_recent_replies, get_today_count, init_db, get_pending_reviews, update_review_status, log_reply
 
 app = Flask(__name__)
 CORS(app)
@@ -83,6 +83,37 @@ def api_chart_daily():
 def api_replies():
     replies = get_recent_replies(limit=100)
     return jsonify(replies)
+
+
+@app.route("/api/review/pending")
+def api_review_pending():
+    items = get_pending_reviews(limit=20)
+    return jsonify(items)
+
+
+@app.route("/api/review/<int:review_id>/approve", methods=["POST"])
+def api_review_approve(review_id):
+    items = get_pending_reviews(limit=100)
+    item = next((i for i in items if i["id"] == review_id), None)
+    if not item:
+        return jsonify({"error": "not found"}), 404
+    update_review_status(review_id, "approved")
+    log_reply(
+        "x",
+        item["post_url"],
+        "DR Community",
+        (item.get("post_content") or "")[:100],
+        item["suggested_comment"],
+        None,
+        "posted"
+    )
+    return jsonify({"status": "approved", "id": review_id})
+
+
+@app.route("/api/review/<int:review_id>/reject", methods=["POST"])
+def api_review_reject(review_id):
+    update_review_status(review_id, "rejected")
+    return jsonify({"status": "rejected", "id": review_id})
 
 
 def _count_product(name: str) -> int:

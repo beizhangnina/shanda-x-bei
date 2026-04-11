@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Social Bot Dashboard</title>
+<title>bei-x Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   :root {
@@ -65,14 +65,27 @@
 
   .refresh-btn { margin-left: auto; background: var(--border); border: none; color: var(--text); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   .refresh-btn:hover { background: var(--accent); }
+  .review-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .review-post { font-size: 13px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; border-left: 2px solid var(--border); padding-left: 12px; }
+  .review-comment { font-size: 14px; color: var(--text); margin-bottom: 14px; line-height: 1.6; }
+  .review-actions { display: flex; gap: 8px; }
+  .btn-approve { background: var(--green); color: #fff; border: none; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; }
+  .btn-approve:hover { opacity: .85; }
+  .btn-reject { background: var(--border); color: var(--muted); border: none; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .btn-reject:hover { background: var(--red); color: #fff; }
+  .tab-btn { background: var(--border); border: none; color: var(--text); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; margin-left: 8px; }
+  .tab-btn.active { background: var(--accent); }
+  .tab-btn:hover:not(.active) { background: var(--accent); opacity: .7; }
 </style>
 </head>
 <body>
 
 <header>
   <div class="live-dot"></div>
-  <h1>Social Bot Dashboard</h1>
-  <span class="badge">Solvea + VOC.ai</span>
+  <h1>bei-x Dashboard</h1>
+  <span class="badge">MiroMind · @bei_zhang01</span>
+  <button class="tab-btn active" id="tab-stats" onclick="showTab('stats')">Stats</button>
+  <button class="tab-btn" id="tab-review" onclick="showTab('review')">Review Queue</button>
   <button class="refresh-btn" onclick="loadAll()">↻ Refresh</button>
 </header>
 
@@ -138,6 +151,14 @@
           <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:32px">Loading...</td></tr>
         </tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Review Queue -->
+  <div class="table-section" id="review-section" style="display:none">
+    <h2>Pending Comments — Review Queue</h2>
+    <div id="review-body">
+      <p style="color:var(--muted);text-align:center;padding:32px">Loading...</p>
     </div>
   </div>
 </main>
@@ -217,6 +238,54 @@ async function loadAll() {
 loadAll();
 setInterval(loadOverview, 30000);   // refresh stats every 30s
 setInterval(loadReplies,  60000);   // refresh table every 60s
+
+function showTab(tab) {
+  document.querySelector('.stats').style.display = tab === 'stats' ? '' : 'none';
+  document.querySelector('.chart-section').style.display = tab === 'stats' ? '' : 'none';
+  document.querySelector('.table-section:not(#review-section)').style.display = tab === 'stats' ? '' : 'none';
+  document.getElementById('review-section').style.display = tab === 'review' ? '' : 'none';
+  document.getElementById('tab-stats').classList.toggle('active', tab === 'stats');
+  document.getElementById('tab-review').classList.toggle('active', tab === 'review');
+  if (tab === 'review') loadReview();
+}
+
+async function loadReview() {
+  const container = document.getElementById('review-body');
+  container.innerHTML = '<p style="color:var(--muted);text-align:center;padding:32px">Loading...</p>';
+  const items = await fetch('/api/review/pending').then(r => r.json());
+  if (!items.length) {
+    container.innerHTML = '<p style="color:var(--muted);text-align:center;padding:32px">No pending comments — check back after the next run.</p>';
+    return;
+  }
+  container.innerHTML = items.map(item => `
+    <div class="review-card" id="review-${item.id}">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+        <a href="${item.post_url}" target="_blank" style="color:var(--accent)">${item.post_url}</a>
+        · ${item.created_at ? item.created_at.slice(0,16) : ''}
+      </div>
+      <div class="review-post">${(item.post_content || '').slice(0, 200)}${(item.post_content||'').length > 200 ? '…' : ''}</div>
+      <div class="review-comment">"${item.suggested_comment}"</div>
+      <div class="review-actions">
+        <button class="btn-approve" onclick="approveComment(${item.id})">✅ Approve</button>
+        <button class="btn-reject" onclick="rejectComment(${item.id})">❌ Reject</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function approveComment(id) {
+  const card = document.getElementById('review-' + id);
+  await fetch('/api/review/' + id + '/approve', { method: 'POST' });
+  card.style.opacity = '0.4';
+  card.querySelector('.review-actions').innerHTML = '<span style="color:var(--green);font-size:13px">✅ Approved</span>';
+}
+
+async function rejectComment(id) {
+  const card = document.getElementById('review-' + id);
+  await fetch('/api/review/' + id + '/reject', { method: 'POST' });
+  card.style.opacity = '0.4';
+  card.querySelector('.review-actions').innerHTML = '<span style="color:var(--muted);font-size:13px">❌ Rejected</span>';
+}
 </script>
 </body>
 </html>
