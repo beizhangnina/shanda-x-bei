@@ -8,3 +8,5 @@ venv/
 .venv/
 *.log
 browse_sessions/
+chrome_profile/
+logs/
