@@ -72,6 +72,11 @@ def scroll(x: int, y: int, dx: int, dy: int) -> bool:
     return data.get("scrolled", False)
 
 
+def back() -> bool:
+    data = _run("back", timeout=10)
+    return bool(data)
+
+
 def get_url() -> str:
     data = _run("get url", timeout=10)
     return data.get("url", "")

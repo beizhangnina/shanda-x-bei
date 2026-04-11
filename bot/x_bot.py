@@ -5,6 +5,7 @@ Searches for relevant posts and posts replies as @VocAiSage.
 import re
 import time
 import logging
+from datetime import date, datetime
 from typing import List
 from . import browser as B
 from .ai_engine import generate_reply, analyze_lead
@@ -33,6 +34,17 @@ def _is_logged_in() -> bool:
     # On x.com root — check if home feed loaded vs "Happening now" landing
     tree = B.snapshot()
     return "Home timeline" in tree or "bei_zhang01" in tree
+
+
+def _click_and_wait_for_tweet(ref: str, prev_url: str, timeout: int = 8) -> str:
+    """Click a ref and wait until URL changes to a tweet /status/ URL. Returns new URL or ''."""
+    B.click(ref)
+    for _ in range(timeout):
+        B.wait_seconds(1)
+        url = B.get_url()
+        if url and "/status/" in url and url != prev_url:
+            return url
+    return B.get_url()
 
 
 def _login_if_needed():
@@ -68,7 +80,15 @@ def _parse_age_days(time_label: str) -> float:
     m = re.match(r'^(\d+)d$', label)
     if m:
         return float(m.group(1))
-    # Month-day format (e.g. "Apr 7") — assume older than 3 days
+    # Month-day format (e.g. "Apr 8") — calculate actual age
+    try:
+        today = date.today()
+        dt = datetime.strptime(f"{label} {today.year}", "%b %d %Y").date()
+        if dt > today:  # Handle year boundary
+            dt = dt.replace(year=today.year - 1)
+        return float((today - dt).days)
+    except ValueError:
+        pass
     return 999.0
 
 
@@ -88,9 +108,9 @@ def _search_posts(query: str, max_age_days: int = 3) -> List[dict]:
         next_pos = article_positions[i + 1][0] if i + 1 < len(article_positions) else len(tree)
         block = tree[pos:next_pos]
 
-        # Time link: accepts hours, minutes, days, "just now" — NOT bare month-day dates
+        # Time link: matches relative (3h, 2d) AND absolute (Apr 8) formats
         time_match = re.search(
-            r'\[(\d+-\d+)\] link: (just now|\d+[hmd])',
+            r'\[(\d+-\d+)\] link: (just now|\d+[hmd]|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+)',
             block
         )
         if not time_match:
@@ -209,7 +229,7 @@ def run(config: dict) -> dict:
             real_url = B.get_url()
 
             if already_replied(real_url):
-                B.press("Alt+Left")
+                B.back()
                 B.wait_seconds(2)
                 summary["skipped"] += 1
                 continue
@@ -281,9 +301,9 @@ def repost_team_accounts(config: dict) -> dict:
                 if not snippet or len(snippet) < 30:
                     continue
 
-                # Time ref — only accept posts within 3 days
+                # Time ref — only accept posts within 3 days (relative or absolute date)
                 time_match = re.search(
-                    r'\[(\d+-\d+)\] link: (just now|\d+[hmd])',
+                    r'\[(\d+-\d+)\] link: (just now|\d+[hmd]|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+)',
                     block
                 )
                 if time_match:
@@ -300,19 +320,17 @@ def repost_team_accounts(config: dict) -> dict:
                     summary["skipped"] += 1
                     continue
 
-                # Open tweet to get URL (wait for navigation to complete)
-                B.click(time_ref)
-                B.wait_seconds(4)
-                real_url = B.get_url()
-                # Verify navigation succeeded (URL should be a tweet, not a profile page)
+                # Open tweet — poll until /status/ URL appears (up to 8s)
+                prev_url = B.get_url()
+                real_url = _click_and_wait_for_tweet(time_ref, prev_url)
                 if not real_url or "/status/" not in real_url:
-                    B.press("Alt+Left")
+                    B.back()
                     B.wait_seconds(2)
                     summary["errors"] += 1
                     continue
 
                 if already_replied(real_url):
-                    B.press("Alt+Left")
+                    B.back()
                     B.wait_seconds(2)
                     summary["skipped"] += 1
                     continue
@@ -323,7 +341,7 @@ def repost_team_accounts(config: dict) -> dict:
                 # Skip if already retweeted (button shows "Undo repost")
                 already_rt = re.search(r'button: Undo repost', tree2)
                 if already_rt or not repost_btns:
-                    B.press("Alt+Left")
+                    B.back()
                     B.wait_seconds(2)
                     summary["skipped"] += 1
                     continue
@@ -344,7 +362,7 @@ def repost_team_accounts(config: dict) -> dict:
                 else:
                     summary["errors"] += 1
 
-                B.press("Alt+Left")
+                B.back()
                 B.wait_seconds(2)
 
         except Exception as e:
@@ -390,18 +408,17 @@ def search_and_repost_dr(config: dict) -> dict:
             if not post.get("time_ref"):
                 continue
 
-            B.click(post["time_ref"])
-            B.wait_seconds(4)
-            real_url = B.get_url()
+            prev_url = B.get_url()
+            real_url = _click_and_wait_for_tweet(post["time_ref"], prev_url)
 
             # Verify navigation reached a tweet (not still on search page)
             if not real_url or "/status/" not in real_url:
-                B.press("Alt+Left")
+                B.back()
                 B.wait_seconds(2)
                 continue
 
             if already_replied(real_url):
-                B.press("Alt+Left")
+                B.back()
                 B.wait_seconds(2)
                 summary["skipped"] += 1
                 continue
@@ -427,7 +444,7 @@ def search_and_repost_dr(config: dict) -> dict:
                         logger.info(f"Flow2: reposted DR content — {real_url}")
                         time.sleep(delay)
 
-            B.press("Alt+Left")
+            B.back()
             B.wait_seconds(2)
 
     return summary
@@ -458,7 +475,7 @@ def search_and_queue_comments(config: dict, can_engage_posts: list = None) -> di
                             B.wait_seconds(3)
                             url = B.get_url()
                             can_engage_posts.append({"url": url, "snippet": snippet})
-                            B.press("Alt+Left")
+                            B.back()
                             B.wait_seconds(2)
 
     for post_data in can_engage_posts:
