@@ -59,6 +59,26 @@ def init_db():
                 replied      INTEGER DEFAULT 0,
                 created_at   TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS review_queue (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_url         TEXT NOT NULL,
+                post_content     TEXT,
+                suggested_comment TEXT NOT NULL,
+                status           TEXT DEFAULT 'pending',   -- pending / approved / rejected
+                created_at       TEXT DEFAULT (datetime('now')),
+                actioned_at      TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS follow_queue (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                handle      TEXT UNIQUE NOT NULL,
+                source      TEXT DEFAULT 'manual',   -- manual / dr_discovered
+                status      TEXT DEFAULT 'pending',  -- pending / followed / skipped
+                followed_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_follow_status ON follow_queue(status);
         """)
 
 
@@ -151,3 +171,91 @@ def get_recent_replies(limit=50):
             LIMIT ?
         """, (limit,)).fetchall()
         return [dict(r) for r in rows]
+
+
+def add_to_review_queue(post_url: str, post_content: str, suggested_comment: str):
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO review_queue (post_url, post_content, suggested_comment)
+            VALUES (?, ?, ?)
+        """, (post_url, post_content, suggested_comment))
+
+
+def get_pending_reviews(limit=20) -> list:
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT id, post_url, post_content, suggested_comment, created_at
+            FROM review_queue
+            WHERE status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_review_status(review_id: int, status: str):
+    """status: 'approved' or 'rejected'"""
+    with get_conn() as conn:
+        conn.execute("""
+            UPDATE review_queue
+            SET status = ?, actioned_at = datetime('now')
+            WHERE id = ?
+        """, (status, review_id))
+
+
+def import_follow_list(handles: list):
+    """Bulk insert handles into follow_queue (INSERT OR IGNORE for dedup)."""
+    with get_conn() as conn:
+        conn.executemany("""
+            INSERT OR IGNORE INTO follow_queue (handle, source)
+            VALUES (?, 'manual')
+        """, [(h,) for h in handles])
+
+
+def get_pending_follows(limit=15) -> list:
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT id, handle FROM follow_queue
+            WHERE status = 'pending'
+            ORDER BY id ASC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_followed(handle: str):
+    with get_conn() as conn:
+        conn.execute("""
+            UPDATE follow_queue
+            SET status = 'followed', followed_at = datetime('now')
+            WHERE handle = ?
+        """, (handle,))
+
+
+def already_in_follow_queue(handle: str) -> bool:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM follow_queue WHERE handle = ?", (handle,)
+        ).fetchone()
+        return row is not None
+
+
+def add_to_follow_queue(handle: str, source: str = 'dr_discovered'):
+    """Add a single handle (INSERT OR IGNORE)."""
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO follow_queue (handle, source)
+            VALUES (?, ?)
+        """, (handle, source))
+
+
+def get_follow_stats() -> dict:
+    with get_conn() as conn:
+        row = conn.execute("""
+            SELECT
+                COUNT(*) FILTER (WHERE status='pending')  as pending,
+                COUNT(*) FILTER (WHERE status='followed') as followed,
+                COUNT(*) FILTER (WHERE status='skipped')  as skipped
+            FROM follow_queue
+        """).fetchone()
+        return dict(row) if row else {}
