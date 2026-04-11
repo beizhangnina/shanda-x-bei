@@ -3,12 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.socialbot.daily</string>
+    <string>com.beix.daily</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>/Users/guozhen/social-bot/run_daily.py</string>
+        <string>/Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/run_daily.py</string>
     </array>
 
     <!-- Run at 10:05 AM every day -->
@@ -29,9 +29,9 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/guozhen/social-bot/logs/launchd_stdout.log</string>
+    <string>/Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/logs/launchd_stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/guozhen/social-bot/logs/launchd_stderr.log</string>
+    <string>/Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/logs/launchd_stderr.log</string>
 
     <key>RunAtLoad</key>
     <false/>
