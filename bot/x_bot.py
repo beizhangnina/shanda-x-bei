@@ -8,7 +8,10 @@ import logging
 from typing import List
 from . import browser as B
 from .ai_engine import generate_reply, analyze_lead
+from .ai_engine import filter_team_content, score_dr_content, generate_comment
 from .db import log_reply, already_replied, get_today_count, save_lead
+from .db import (add_to_review_queue, get_pending_follows, mark_followed,
+                 add_to_follow_queue, get_follow_stats)
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +21,7 @@ SEARCH_URL = "https://x.com/search?q={query}&src=typed_query&f=live"
 
 def _is_logged_in() -> bool:
     tree = B.snapshot()
-    return "VocAiSage" in tree or "Hunter Guo" in tree
+    return "bei_zhang01" in tree or "Hunter Guo" in tree
 
 
 def _login_if_needed():
@@ -199,3 +202,291 @@ def run(config: dict) -> dict:
                 time.sleep(10)
 
     return summary
+
+
+def repost_team_accounts(config: dict) -> dict:
+    """
+    Flow 1: Visit each team account's timeline, filter with Claude, auto-repost.
+    config: the full config dict (read from config.json)
+    """
+    team_accounts = config["x"].get("team_accounts", [])
+    max_reposts = config["x"].get("max_daily_reposts", 15)
+    delay = config["x"].get("min_delay_seconds", 300)
+
+    summary = {"reposts": 0, "skipped": 0, "errors": 0}
+
+    if not _login_if_needed():
+        logger.error("Flow1: cannot proceed without login")
+        return summary
+
+    for account in team_accounts:
+        if summary["reposts"] >= max_reposts:
+            break
+
+        handle = account.lstrip("@")
+        profile_url = f"https://x.com/{handle}"
+        logger.info(f"Flow1: visiting {profile_url}")
+
+        try:
+            B.open_url(profile_url)
+            B.wait_seconds(3)
+            tree = B.snapshot()
+
+            # Find article blocks (same pattern as _search_posts)
+            article_positions = [(m.start(), m.group(1)) for m in
+                                 re.finditer(r'\[(\d+-\d+)\] article:', tree)]
+
+            for i, (pos, article_ref) in enumerate(article_positions[:5]):
+                if summary["reposts"] >= max_reposts:
+                    break
+
+                next_pos = article_positions[i + 1][0] if i + 1 < len(article_positions) else len(tree)
+                block = tree[pos:next_pos]
+
+                # Extract snippet
+                texts = re.findall(r'StaticText: ([^\n]{10,})', block)
+                snippet = " ".join(texts[:6])[:350]
+                if not snippet or len(snippet) < 30:
+                    continue
+
+                # Time ref (to click into tweet)
+                time_match = re.search(
+                    r'\[(\d+-\d+)\] link: (?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+|\d+[hm]|just now)',
+                    block
+                )
+                if not time_match:
+                    continue
+                time_ref = time_match.group(1)
+
+                # Claude filter
+                decision = filter_team_content(snippet)
+                if decision != "REPOST":
+                    summary["skipped"] += 1
+                    continue
+
+                # Open tweet to get URL
+                B.click(time_ref)
+                B.wait_seconds(3)
+                real_url = B.get_url()
+
+                if already_replied(real_url):
+                    B.press("Alt+Left")
+                    B.wait_seconds(2)
+                    summary["skipped"] += 1
+                    continue
+
+                # Find repost button and click it
+                tree2 = B.snapshot()
+                repost_btns = re.findall(r'\[(\d+-\d+)\] button: Repost', tree2)
+                if not repost_btns:
+                    B.press("Alt+Left")
+                    B.wait_seconds(2)
+                    summary["errors"] += 1
+                    continue
+
+                B.click(repost_btns[0])
+                B.wait_seconds(1)
+
+                # Confirm repost in popup
+                tree3 = B.snapshot()
+                confirm_btns = re.findall(r'\[(\d+-\d+)\] menuitem: Repost', tree3)
+                if confirm_btns:
+                    B.click(confirm_btns[0])
+                    B.wait_seconds(2)
+                    log_reply("x", real_url, account, snippet, f"[REPOST from {account}]", None, "posted")
+                    summary["reposts"] += 1
+                    logger.info(f"Flow1: reposted from {account} — {real_url}")
+                    time.sleep(delay)
+                else:
+                    summary["errors"] += 1
+
+                B.press("Alt+Left")
+                B.wait_seconds(2)
+
+        except Exception as e:
+            logger.error(f"Flow1: error on {account}: {e}")
+            summary["errors"] += 1
+
+    return summary
+
+
+def search_and_repost_dr(config: dict) -> dict:
+    """
+    Flow 2: Search Deep Research keywords, score content, auto-repost high-quality hits.
+    Returns summary dict and a list of can_engage post URLs for Flow 3.
+    """
+    queries = config["x"].get("search_queries", [])
+    max_reposts = config["x"].get("max_daily_reposts", 15)
+    delay = config["x"].get("min_delay_seconds", 300)
+
+    summary = {"reposts": 0, "skipped": 0, "can_engage_urls": []}
+
+    if not _login_if_needed():
+        logger.error("Flow2: cannot proceed without login")
+        return summary
+
+    for query in queries:
+        if summary["reposts"] >= max_reposts:
+            break
+
+        logger.info(f"Flow2: searching '{query}'")
+        posts = _search_posts(query)
+
+        for post in posts:
+            snippet = post.get("snippet", "")
+            if not snippet or len(snippet) < 30:
+                continue
+
+            # Score content
+            score = score_dr_content(snippet)
+            if score["quality"] != "high":
+                summary["skipped"] += 1
+                continue
+
+            if not post.get("time_ref"):
+                continue
+
+            B.click(post["time_ref"])
+            B.wait_seconds(3)
+            real_url = B.get_url()
+
+            if already_replied(real_url):
+                B.press("Alt+Left")
+                B.wait_seconds(2)
+                summary["skipped"] += 1
+                continue
+
+            # Track engage-worthy posts for Flow 3
+            if score["can_engage"]:
+                summary["can_engage_urls"].append({"url": real_url, "snippet": snippet})
+
+            if summary["reposts"] < max_reposts:
+                tree = B.snapshot()
+                repost_btns = re.findall(r'\[(\d+-\d+)\] button: Repost', tree)
+                if repost_btns:
+                    B.click(repost_btns[0])
+                    B.wait_seconds(1)
+                    tree2 = B.snapshot()
+                    confirm_btns = re.findall(r'\[(\d+-\d+)\] menuitem: Repost', tree2)
+                    if confirm_btns:
+                        B.click(confirm_btns[0])
+                        B.wait_seconds(2)
+                        log_reply("x", real_url, query, snippet, "[DR REPOST]", None, "posted")
+                        summary["reposts"] += 1
+                        logger.info(f"Flow2: reposted DR content — {real_url}")
+                        time.sleep(delay)
+
+            B.press("Alt+Left")
+            B.wait_seconds(2)
+
+    return summary
+
+
+def search_and_queue_comments(config: dict, can_engage_posts: list = None) -> dict:
+    """
+    Flow 3: Generate AI comments for engage-worthy posts, add to review_queue.
+    Posts are NOT published — they wait for user approval in the dashboard.
+    can_engage_posts: list of {"url": ..., "snippet": ...} from Flow 2
+    """
+    summary = {"queued": 0, "skipped": 0}
+
+    if not can_engage_posts:
+        # Fallback: do a fresh search if no posts passed in
+        queries = config["x"].get("search_queries", [])
+        can_engage_posts = []
+        for query in queries[:3]:  # limit to 3 queries in fallback
+            posts = _search_posts(query)
+            for post in posts[:5]:
+                snippet = post.get("snippet", "")
+                if snippet and len(snippet) >= 30:
+                    score = score_dr_content(snippet)
+                    if score["can_engage"]:
+                        # We need the URL — open it
+                        if post.get("time_ref"):
+                            B.click(post["time_ref"])
+                            B.wait_seconds(3)
+                            url = B.get_url()
+                            can_engage_posts.append({"url": url, "snippet": snippet})
+                            B.press("Alt+Left")
+                            B.wait_seconds(2)
+
+    for post_data in can_engage_posts:
+        url = post_data["url"]
+        snippet = post_data["snippet"]
+
+        comment = generate_comment(snippet)
+        if not comment:
+            summary["skipped"] += 1
+            continue
+
+        add_to_review_queue(url, snippet, comment)
+        summary["queued"] += 1
+        logger.info(f"Flow3: queued comment for {url}")
+
+    return summary
+
+
+def follow_daily_batch(config: dict) -> dict:
+    """
+    Flow 4: Follow up to max_daily_follows accounts from the pending follow_queue.
+    """
+    max_follows = config["x"].get("max_daily_follows", 15)
+    pending = get_pending_follows(limit=max_follows)
+    summary = {"followed": 0, "failed": 0}
+
+    if not pending:
+        logger.info("Flow4: no pending follows in queue")
+        return summary
+
+    if not _login_if_needed():
+        logger.error("Flow4: cannot proceed without login")
+        return summary
+
+    for item in pending:
+        handle = item["handle"]
+        profile_url = f"https://x.com/{handle}"
+
+        try:
+            B.open_url(profile_url)
+            B.wait_seconds(3)
+            tree = B.snapshot()
+
+            # Look for Follow button (not Following)
+            follow_btns = re.findall(r'\[(\d+-\d+)\] button: Follow', tree)
+            if not follow_btns:
+                # Already following or account doesn't exist
+                mark_followed(handle)
+                logger.info(f"Flow4: already following or not found — {handle}")
+                continue
+
+            B.click(follow_btns[0])
+            B.wait_seconds(2)
+
+            # Verify
+            tree2 = B.snapshot()
+            if "Following" in tree2 or "Unfollow" in tree2:
+                mark_followed(handle)
+                summary["followed"] += 1
+                logger.info(f"Flow4: followed @{handle}")
+            else:
+                summary["failed"] += 1
+                logger.warning(f"Flow4: follow may have failed — @{handle}")
+
+            time.sleep(10)  # Be gentle between follows
+
+        except Exception as e:
+            logger.error(f"Flow4: error following {handle}: {e}")
+            summary["failed"] += 1
+
+    return summary
+
+
+def maybe_enqueue_influencer(handle: str, follower_count: int, config: dict):
+    """
+    If an account has followers above the threshold, add to follow_queue.
+    Called during DR browsing when high-follower accounts are discovered.
+    """
+    threshold = config["x"].get("influencer_follower_threshold", 5000)
+    if follower_count >= threshold:
+        add_to_follow_queue(handle, source="dr_discovered")
+        logger.info(f"Flow4: enqueued influencer @{handle} ({follower_count} followers)")
