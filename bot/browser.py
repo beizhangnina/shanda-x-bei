@@ -6,6 +6,7 @@ import subprocess
 import json
 import time
 import re
+from typing import Optional
 
 
 class BrowseError(Exception):
@@ -82,7 +83,7 @@ def get_url() -> str:
     return data.get("url", "")
 
 
-def get_box(ref_or_selector: str) -> dict | None:
+def get_box(ref_or_selector: str) -> Optional[dict]:
     """Get bounding box {x, y} of element by accessibility ref ('0-123') or CSS selector."""
     if re.match(r'^\d+-\d+$', ref_or_selector):
         data = _run(f"get box @{ref_or_selector}", timeout=5)
@@ -102,6 +103,35 @@ def find_text_refs(tree: str, text: str) -> list[str]:
     """Find refs of elements containing given text."""
     escaped = re.escape(text)
     return re.findall(rf'\[(\d+-\d+)\][^\n]*{escaped}', tree)
+
+
+def eval_js(expression: str):
+    """Evaluate JavaScript in the page. Returns the result value or None."""
+    import shlex
+    data = _run(f"eval {shlex.quote(expression)}", timeout=15)
+    return data.get("result")
+
+
+def wait_for(selector: str, timeout_ms: int = 10000) -> bool:
+    """Wait for a CSS selector to become visible. Returns True if found."""
+    import shlex
+    data = _run(f"wait selector {shlex.quote(selector)} -t {timeout_ms}", timeout=timeout_ms // 1000 + 5)
+    return bool(data) and "error" not in str(data).lower()
+
+
+def js_click(selector: str) -> bool:
+    """Click an element via JavaScript using a CSS selector. Most reliable click method."""
+    result = eval_js(
+        f"(() => {{ const el = document.querySelector('{selector}');"
+        f" if (!el) return false; el.click(); return true; }})()"
+    )
+    return result is True
+
+
+def js_exists(selector: str) -> bool:
+    """Check if a CSS selector exists in the DOM."""
+    result = eval_js(f"!!document.querySelector('{selector}')")
+    return result is True
 
 
 def wait_seconds(n: float):

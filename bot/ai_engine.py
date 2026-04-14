@@ -71,14 +71,11 @@ def filter_team_content(post_text: str) -> str:
     system = f"""You are {persona.get('name', 'Bei Zhang')}, {persona.get('role', 'Growth VP at MiroMind')}.
 Decide if the following tweet from a team member is worth retweeting from your account.
 
-REPOST if the tweet is about:
-- AI research, deep reasoning, or enterprise AI
-- Technical insights, papers, or product progress from the team
-- Anything that builds {product.get('name', 'MiroMind')}'s brand or credibility
+Default to REPOST. Team member posts are generally worth sharing.
 
-SKIP if the tweet is:
-- Personal life, casual chat, or unrelated topics
-- A retweet of someone else's post with no added insight
+Only output SKIP if the tweet is clearly:
+- Pure personal life (birthday, travel, food) with zero professional relevance
+- A casual non-substantive reply to someone with no standalone value
 
 Output only the word REPOST or SKIP — nothing else."""
 
@@ -91,14 +88,26 @@ def score_dr_content(post_text: str) -> dict:
     Flow 2: Evaluates Deep Research content quality and engagement potential.
     Returns {"quality": "high"|"low", "can_engage": bool}
     """
-    system = """You evaluate tweets for Deep Research AI content quality.
-High quality: academic progress, technical discussion, industry insight, thought leadership in AI reasoning/research.
-Low quality: hype, shallow takes, off-topic, promotional spam.
+    product = CONFIG.get("product", {})
+    brand = product.get("name", "MiroMind")
+
+    system = f"""You evaluate tweets related to Deep Research AI or {brand}.
+
+HIGH quality (worth reposting):
+- Positive mention of {brand} or MiroThinker with genuine insight or experience
+- Technical discussion about deep reasoning, AI verification, or research AI
+- Industry insight or thought leadership in AI reasoning
+- User testimonials, demos, or product experiences with {brand}
+
+LOW quality (skip):
+- Generic spam, bot-generated filler, or thread-farming
+- Negative sentiment or complaints about {brand}
+- Completely off-topic (not about AI research/reasoning/{brand})
 
 can_engage=true means there is natural space for a knowledgeable reply that adds value.
 
-Respond ONLY with valid JSON, exactly this format:
-{"quality": "high", "can_engage": true}"""
+Respond ONLY with valid JSON:
+{{"quality": "high", "can_engage": true}}"""
 
     try:
         text = _chat(system, post_text[:600], MODEL_FAST, 50)
