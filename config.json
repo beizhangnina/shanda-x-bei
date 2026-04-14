@@ -6,7 +6,7 @@
     "max_daily_follows": 20,
     "min_delay_seconds": 600,
     "influencer_follower_threshold": 5000,
-    "min_engagement_repost": 10,
+    "min_engagement_repost": 50,
     "team_max_age_days": 7,
     "max_daily_replies": 5,
     "min_reply_delay_seconds": 600,
