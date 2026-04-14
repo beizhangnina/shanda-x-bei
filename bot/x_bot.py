@@ -477,9 +477,16 @@ def search_and_repost_dr(config: dict) -> dict:
                 summary["skipped"] += 1
                 continue
 
+            # Hard engagement floor — don't waste time on zero-traction posts
+            min_eng = config["x"].get("min_engagement_repost", 10)
+            engagement = tweet.get("engagement", 0)
+            if engagement < min_eng:
+                summary["skipped"] += 1
+                continue
+
             # Score content with AI
             score = score_dr_content(snippet)
-            logger.info(f"Flow2: scored '{snippet[:60]}...' → {score} (engagement={tweet.get('engagement', 0)})")
+            logger.info(f"Flow2: scored '{snippet[:60]}...' → {score} (engagement={engagement})")
             if score["quality"] != "high":
                 summary["skipped"] += 1
                 continue

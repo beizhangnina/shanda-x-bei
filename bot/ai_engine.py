@@ -101,6 +101,7 @@ HIGH quality (worth reposting):
 
 LOW quality (skip):
 - Generic spam, bot-generated filler, or thread-farming
+- Templated promotional posts ("To put it simply:", "To sum it up", "To phrase it differently:") — these are spam bots
 - Negative sentiment or complaints about {brand}
 - Completely off-topic (not about AI research/reasoning/{brand})
 
