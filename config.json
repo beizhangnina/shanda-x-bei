@@ -25,6 +25,18 @@
       "@christlurker",
       "@howtocluster"
     ],
+    "feed_engagement": {
+      "min_engagement_reply": 50,
+      "min_engagement_repost": 200,
+      "min_engagement_quote": 500,
+      "max_daily_feed_replies": 10,
+      "max_daily_feed_reposts": 5,
+      "max_daily_quotes": 3,
+      "min_reply_delay": 360,
+      "min_repost_delay": 600,
+      "min_quote_delay": 1000,
+      "jitter_seconds": 180
+    },
     "search_queries": [
       "MiroMind",
       "MiroThinker",

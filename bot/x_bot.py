@@ -11,9 +11,11 @@ from typing import List
 from . import browser as B
 from .ai_engine import generate_reply, analyze_lead
 from .ai_engine import filter_team_content, score_dr_content, generate_comment
+from .ai_engine import decide_engagement, generate_light_reply, generate_quote_insight
 from .db import log_reply, already_replied, get_today_count, save_lead
 from .db import (add_to_review_queue, get_pending_follows, mark_followed,
-                 add_to_follow_queue, get_follow_stats)
+                 add_to_follow_queue, get_follow_stats,
+                 log_feed_seen, feed_already_seen, get_today_feed_counts)
 
 logger = logging.getLogger(__name__)
 
@@ -738,6 +740,272 @@ def reply_to_engage_posts(config: dict, can_engage_posts: list = None) -> dict:
             logger.error(f"Flow5: error replying to {url}: {e}")
             summary["failed"] += 1
 
+    return summary
+
+
+def browse_feed_and_engage(config: dict) -> dict:
+    """
+    Flow 6: Browse the home feed and engage with posts using a tiered strategy.
+    - REPLY (>=50 engagement): light 1-2 sentence comment
+    - REPOST (>=200 engagement): just retweet
+    - QUOTE (>=500 engagement): add insightful comment as quote tweet
+    Returns summary dict: {"replies": N, "reposts": N, "quotes": N, "skipped": N}
+    """
+    fe = config["x"]["feed_engagement"]
+    max_replies = fe.get("max_daily_feed_replies", 10)
+    max_reposts = fe.get("max_daily_feed_reposts", 5)
+    max_quotes = fe.get("max_daily_quotes", 3)
+    min_reply_delay = fe.get("min_reply_delay", 360)
+    min_repost_delay = fe.get("min_repost_delay", 600)
+    min_quote_delay = fe.get("min_quote_delay", 1000)
+    jitter = fe.get("jitter_seconds", 180)
+
+    summary = {"replies": 0, "reposts": 0, "quotes": 0, "skipped": 0}
+
+    if not _login_if_needed():
+        logger.error("Flow6: cannot proceed without login")
+        return summary
+
+    # Step 2: Navigate to home feed
+    B.open_url("https://x.com/home")
+    B.wait_seconds(5)
+
+    # Step 3: Extract tweets via JS
+    JS_FEED_TWEETS = (
+        "Array.from(document.querySelectorAll('article')).slice(0,20).map(a => {"
+        "  const tl = a.querySelector('time')?.parentElement;"
+        "  const t = a.querySelector('time');"
+        "  const text = a.querySelector('[data-testid=\"tweetText\"]')?.innerText || '';"
+        "  const metrics = a.querySelector('[role=\"group\"]')?.getAttribute('aria-label') || '';"
+        "  const authorEl = a.querySelector('[data-testid=\"User-Name\"]');"
+        "  const author = authorEl ? authorEl.innerText : '';"
+        "  return {"
+        "    url: tl ? tl.href : null,"
+        "    datetime: t ? t.getAttribute('datetime') : null,"
+        "    alreadyRt: !!a.querySelector('[data-testid=\"unretweet\"]'),"
+        "    snippet: text.slice(0, 300),"
+        "    metrics: metrics,"
+        "    author: author"
+        "  };"
+        "}).filter(x => x.url && x.datetime)"
+    )
+
+    tweets_first = B.eval_js(JS_FEED_TWEETS)
+    if not tweets_first or not isinstance(tweets_first, list):
+        tweets_first = []
+
+    # Step 4: Scroll down, extract more, deduplicate by URL
+    B.scroll(400, 400, 0, -800)
+    B.wait_seconds(3)
+
+    tweets_second = B.eval_js(JS_FEED_TWEETS)
+    if not tweets_second or not isinstance(tweets_second, list):
+        tweets_second = []
+
+    seen_urls = set()
+    all_tweets = []
+    for tweet in tweets_first + tweets_second:
+        url = tweet.get("url")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            all_tweets.append(tweet)
+
+    # Step 5: Parse engagement from metrics string and sort descending
+    for tweet in all_tweets:
+        metrics = tweet.get("metrics", "")
+        counts = re.findall(r'(\d+)\s+(?:repost|like|replie)', metrics)
+        tweet["engagement"] = sum(int(c) for c in counts)
+
+    # Step 6: Sort by engagement descending
+    all_tweets.sort(key=lambda t: t["engagement"], reverse=True)
+    logger.info(f"Flow6: extracted {len(all_tweets)} unique tweets from home feed")
+
+    # Step 7-9: Process each tweet
+    for tweet in all_tweets:
+        tweet_url = tweet.get("url", "")
+        snippet = tweet.get("snippet", "")
+        engagement = tweet.get("engagement", 0)
+        author = tweet.get("author", "")
+        already_rt = tweet.get("alreadyRt", False)
+
+        if not tweet_url or "/status/" not in tweet_url:
+            continue
+
+        if not snippet or len(snippet) < 20:
+            continue
+
+        if already_rt:
+            summary["skipped"] += 1
+            continue
+
+        # Dedup: skip posts we already engaged with
+        if already_replied(tweet_url):
+            summary["skipped"] += 1
+            continue
+
+        # Check daily caps -- stop if all tiers are maxed out
+        if (summary["replies"] >= max_replies
+                and summary["reposts"] >= max_reposts
+                and summary["quotes"] >= max_quotes):
+            logger.info("Flow6: all daily caps reached -- stopping")
+            break
+
+        # Step 7: AI decides engagement tier
+        decision = decide_engagement(snippet, engagement, author)
+        action = decision.get("action", "SKIP")
+        reason = decision.get("reason", "")
+        logger.info(f"Flow6: {action} (eng={engagement}) -- {reason[:80]} -- {tweet_url}")
+
+        if action == "SKIP":
+            summary["skipped"] += 1
+            continue
+
+        # Enforce per-tier daily caps -- fall through to lower tier if capped
+        if action == "QUOTE" and summary["quotes"] >= max_quotes:
+            action = "REPOST"
+            logger.info("Flow6: QUOTE cap reached, falling back to REPOST")
+        if action == "REPOST" and summary["reposts"] >= max_reposts:
+            action = "REPLY"
+            logger.info("Flow6: REPOST cap reached, falling back to REPLY")
+        if action == "REPLY" and summary["replies"] >= max_replies:
+            summary["skipped"] += 1
+            logger.info("Flow6: REPLY cap reached, skipping")
+            continue
+
+        try:
+            # -- REPLY ------------------------------------------------
+            if action == "REPLY":
+                reply_text = generate_light_reply(snippet)
+                if not reply_text:
+                    summary["skipped"] += 1
+                    continue
+
+                B.open_url(tweet_url)
+                B.wait_seconds(4)
+
+                if not B.js_click('[data-testid="tweetTextarea_0"]'):
+                    logger.warning(f"Flow6: can't focus reply textbox -- {tweet_url}")
+                    summary["skipped"] += 1
+                    continue
+
+                B.wait_seconds(1)
+                B.type_text(reply_text)
+                B.wait_seconds(1)
+
+                if not B.js_click('[data-testid="tweetButtonInline"]'):
+                    logger.warning(f"Flow6: can't click Reply button -- {tweet_url}")
+                    summary["skipped"] += 1
+                    B.press("Cmd+a")
+                    B.press("Backspace")
+                    continue
+
+                B.wait_seconds(3)
+
+                # Verify reply was posted
+                textbox_text = B.eval_js(
+                    "document.querySelector('[data-testid=\"tweetTextarea_0\"]')?.innerText?.trim() || ''"
+                )
+                if not textbox_text or len(textbox_text) < 5:
+                    log_reply("x", tweet_url, "feed_reply", snippet, reply_text, None, "posted")
+                    summary["replies"] += 1
+                    logger.info(f"Flow6: replied #{summary['replies']} -- {tweet_url}")
+                else:
+                    log_reply("x", tweet_url, "feed_reply", snippet, reply_text, None, "failed")
+                    logger.warning(f"Flow6: reply may have failed -- {tweet_url}")
+
+                delay = min_reply_delay + random.randint(0, jitter)
+                logger.info(f"Flow6: waiting {delay}s before next action")
+                time.sleep(delay)
+
+            # -- REPOST -----------------------------------------------
+            elif action == "REPOST":
+                B.open_url(tweet_url)
+                B.wait_seconds(4)
+
+                if not B.js_click('[data-testid="retweet"]'):
+                    logger.warning(f"Flow6: no retweet button -- {tweet_url}")
+                    summary["skipped"] += 1
+                    continue
+
+                B.wait_seconds(1)
+
+                if not B.js_click('[data-testid="retweetConfirm"]'):
+                    logger.warning(f"Flow6: retweet confirm failed -- {tweet_url}")
+                    summary["skipped"] += 1
+                    B.press("Escape")
+                    continue
+
+                B.wait_seconds(2)
+                log_reply("x", tweet_url, "feed_repost", snippet, "[FEED REPOST]", None, "posted")
+                summary["reposts"] += 1
+                logger.info(f"Flow6: reposted #{summary['reposts']} -- {tweet_url}")
+
+                delay = min_repost_delay + random.randint(0, jitter)
+                logger.info(f"Flow6: waiting {delay}s before next action")
+                time.sleep(delay)
+
+            # -- QUOTE ------------------------------------------------
+            elif action == "QUOTE":
+                comment = generate_quote_insight(snippet)
+                if not comment:
+                    summary["skipped"] += 1
+                    continue
+
+                B.open_url(tweet_url)
+                B.wait_seconds(4)
+
+                # Open quote-tweet dialog via retweet menu
+                quote_result = B.eval_js(
+                    "(() => { document.querySelector('[data-testid=\"retweet\"]').click();"
+                    " return new Promise(r => setTimeout(() => {"
+                    " const items = Array.from(document.querySelectorAll('[role=\"menuitem\"]'));"
+                    " const q = items.find(el => el.innerText.trim() === 'Quote');"
+                    " if (q) { q.click(); r('OK'); } else r('NO_QUOTE');"
+                    " }, 500)); })()"
+                )
+
+                if quote_result != "OK":
+                    logger.warning(f"Flow6: Quote menu item not found -- {tweet_url}")
+                    summary["skipped"] += 1
+                    B.press("Escape")
+                    continue
+
+                B.wait_seconds(3)
+
+                # Focus the compose area and type
+                if not B.js_click('[data-testid="tweetTextarea_0"]'):
+                    logger.warning(f"Flow6: can't focus quote compose -- {tweet_url}")
+                    summary["skipped"] += 1
+                    B.press("Escape")
+                    continue
+
+                B.wait_seconds(1)
+                B.type_text(comment)
+                B.wait_seconds(1)
+
+                if not B.js_click('[data-testid="tweetButton"]'):
+                    logger.warning(f"Flow6: can't click post button for quote -- {tweet_url}")
+                    summary["skipped"] += 1
+                    B.press("Escape")
+                    continue
+
+                B.wait_seconds(3)
+                log_reply("x", tweet_url, "feed_quote", snippet, comment, None, "posted")
+                summary["quotes"] += 1
+                logger.info(f"Flow6: quoted #{summary['quotes']} -- {tweet_url}")
+
+                delay = min_quote_delay + random.randint(0, jitter)
+                logger.info(f"Flow6: waiting {delay}s before next action")
+                time.sleep(delay)
+
+        except Exception as e:
+            logger.error(f"Flow6: error processing {tweet_url}: {e}")
+            summary["skipped"] += 1
+
+    logger.info(
+        f"Flow6: done -- replies={summary['replies']} reposts={summary['reposts']} "
+        f"quotes={summary['quotes']} skipped={summary['skipped']}"
+    )
     return summary
 
 

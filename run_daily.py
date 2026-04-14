@@ -58,8 +58,8 @@ def import_follow_list_if_needed():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--flow", type=int, choices=[1, 2, 3, 4, 5],
-                        help="Run a specific flow only (1=team repost, 2=DR repost, 3=comment queue, 4=follow, 5=reply)")
+    parser.add_argument("--flow", type=int, choices=[1, 2, 3, 4, 5, 6],
+                        help="Run a specific flow only (1=team repost, 2=DR repost, 3=comment queue, 4=follow, 5=reply, 6=feed engage)")
     parser.add_argument("--no-jitter", action="store_true",
                         help="Skip startup jitter (for testing)")
     parser.add_argument("--skip-follow", action="store_true",
@@ -142,6 +142,16 @@ def main():
         except Exception as e:
             logger.error(f"Flow 5 failed: {e}", exc_info=True)
             results["flow5"] = {"error": str(e)}
+
+    # Flow 6: Browse home feed + tiered engagement (reply/repost/quote)
+    if not args.flow or args.flow == 6:
+        logger.info("Flow 6: Browsing feed for engagement...")
+        try:
+            results["flow6"] = x_bot.browse_feed_and_engage(CONFIG)
+            logger.info(f"Flow 6 done: {results['flow6']}")
+        except Exception as e:
+            logger.error(f"Flow 6 failed: {e}", exc_info=True)
+            results["flow6"] = {"error": str(e)}
 
     elapsed = int(time.time() - start)
     logger.info(f"All done in {elapsed}s — {results}")

@@ -79,6 +79,15 @@ def init_db():
             );
 
             CREATE INDEX IF NOT EXISTS idx_follow_status ON follow_queue(status);
+
+            CREATE TABLE IF NOT EXISTS feed_seen (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_url    TEXT UNIQUE NOT NULL,
+                action      TEXT NOT NULL,    -- 'reply' | 'repost' | 'quote' | 'skip'
+                engagement  INTEGER DEFAULT 0,
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_feed_seen_url ON feed_seen(post_url);
         """)
 
 
@@ -247,6 +256,35 @@ def add_to_follow_queue(handle: str, source: str = 'dr_discovered'):
             INSERT OR IGNORE INTO follow_queue (handle, source)
             VALUES (?, ?)
         """, (handle, source))
+
+
+def log_feed_seen(post_url: str, action: str, engagement: int = 0):
+    """Record a feed post we've seen and acted on."""
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO feed_seen (post_url, action, engagement)
+            VALUES (?, ?, ?)
+        """, (post_url, action, engagement))
+
+
+def feed_already_seen(post_url: str) -> bool:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM feed_seen WHERE post_url = ?", (post_url,)
+        ).fetchone()
+        return row is not None
+
+
+def get_today_feed_counts() -> dict:
+    """Returns {'reply': N, 'repost': N, 'quote': N} for today."""
+    today = date.today().isoformat()
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT action, COUNT(*) as cnt FROM feed_seen
+            WHERE date(created_at) = ?
+            GROUP BY action
+        """, (today,)).fetchall()
+        return {r["action"]: r["cnt"] for r in rows}
 
 
 def get_follow_stats() -> dict:
