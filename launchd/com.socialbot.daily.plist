@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/venv/bin/python3</string>
+        <string>/usr/bin/python3</string>
         <string>/Users/beizhang_claw/Documents/AI_Dev/Shanda/bei-x/run_daily.py</string>
     </array>
 

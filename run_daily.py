@@ -58,8 +58,8 @@ def import_follow_list_if_needed():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--flow", type=int, choices=[1, 2, 3, 4],
-                        help="Run a specific flow only (1=team repost, 2=DR repost, 3=comment queue, 4=follow)")
+    parser.add_argument("--flow", type=int, choices=[1, 2, 3, 4, 5, 6],
+                        help="Run a specific flow only (1=team repost, 2=DR repost, 3=comment queue, 4=follow, 5=reply, 6=feed engage)")
     parser.add_argument("--no-jitter", action="store_true",
                         help="Skip startup jitter (for testing)")
     parser.add_argument("--skip-follow", action="store_true",
@@ -129,6 +129,29 @@ def main():
         except Exception as e:
             logger.error(f"Flow 4 failed: {e}", exc_info=True)
             results["flow4"] = {"error": str(e)}
+
+    # Flow 5: Reply to high-engagement posts (uses can_engage from Flow 2)
+    if not args.flow or args.flow == 5:
+        logger.info("Flow 5: Replying to engage-worthy posts...")
+        try:
+            results["flow5"] = x_bot.reply_to_engage_posts(
+                CONFIG,
+                can_engage_posts=flow2_result.get("can_engage_urls", [])
+            )
+            logger.info(f"Flow 5 done: {results['flow5']}")
+        except Exception as e:
+            logger.error(f"Flow 5 failed: {e}", exc_info=True)
+            results["flow5"] = {"error": str(e)}
+
+    # Flow 6: Browse home feed + tiered engagement (reply/repost/quote)
+    if not args.flow or args.flow == 6:
+        logger.info("Flow 6: Browsing feed for engagement...")
+        try:
+            results["flow6"] = x_bot.browse_feed_and_engage(CONFIG)
+            logger.info(f"Flow 6 done: {results['flow6']}")
+        except Exception as e:
+            logger.error(f"Flow 6 failed: {e}", exc_info=True)
+            results["flow6"] = {"error": str(e)}
 
     elapsed = int(time.time() - start)
     logger.info(f"All done in {elapsed}s — {results}")

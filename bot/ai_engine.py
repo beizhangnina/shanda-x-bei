@@ -71,14 +71,11 @@ def filter_team_content(post_text: str) -> str:
     system = f"""You are {persona.get('name', 'Bei Zhang')}, {persona.get('role', 'Growth VP at MiroMind')}.
 Decide if the following tweet from a team member is worth retweeting from your account.
 
-REPOST if the tweet is about:
-- AI research, deep reasoning, or enterprise AI
-- Technical insights, papers, or product progress from the team
-- Anything that builds {product.get('name', 'MiroMind')}'s brand or credibility
+Default to REPOST. Team member posts are generally worth sharing.
 
-SKIP if the tweet is:
-- Personal life, casual chat, or unrelated topics
-- A retweet of someone else's post with no added insight
+Only output SKIP if the tweet is clearly:
+- Pure personal life (birthday, travel, food) with zero professional relevance
+- A casual non-substantive reply to someone with no standalone value
 
 Output only the word REPOST or SKIP — nothing else."""
 
@@ -91,14 +88,27 @@ def score_dr_content(post_text: str) -> dict:
     Flow 2: Evaluates Deep Research content quality and engagement potential.
     Returns {"quality": "high"|"low", "can_engage": bool}
     """
-    system = """You evaluate tweets for Deep Research AI content quality.
-High quality: academic progress, technical discussion, industry insight, thought leadership in AI reasoning/research.
-Low quality: hype, shallow takes, off-topic, promotional spam.
+    product = CONFIG.get("product", {})
+    brand = product.get("name", "MiroMind")
+
+    system = f"""You evaluate tweets related to Deep Research AI or {brand}.
+
+HIGH quality (worth reposting):
+- Positive mention of {brand} or MiroThinker with genuine insight or experience
+- Technical discussion about deep reasoning, AI verification, or research AI
+- Industry insight or thought leadership in AI reasoning
+- User testimonials, demos, or product experiences with {brand}
+
+LOW quality (skip):
+- Generic spam, bot-generated filler, or thread-farming
+- Templated promotional posts ("To put it simply:", "To sum it up", "To phrase it differently:") — these are spam bots
+- Negative sentiment or complaints about {brand}
+- Completely off-topic (not about AI research/reasoning/{brand})
 
 can_engage=true means there is natural space for a knowledgeable reply that adds value.
 
-Respond ONLY with valid JSON, exactly this format:
-{"quality": "high", "can_engage": true}"""
+Respond ONLY with valid JSON:
+{{"quality": "high", "can_engage": true}}"""
 
     try:
         text = _chat(system, post_text[:600], MODEL_FAST, 50)
@@ -145,3 +155,157 @@ If the post is not worth engaging with, reply with just: SKIP"""
         comment = comment[:277].rsplit(" ", 1)[0] + "..."
 
     return comment
+
+
+# ── Home-feed engagement functions ───────────────────────────────────────────
+
+
+def decide_engagement(snippet: str, engagement: int, author_info: str) -> dict:
+    """
+    Decides how to engage with a home-feed tweet based on engagement level.
+    Returns {"action": "REPLY"|"REPOST"|"QUOTE"|"SKIP", "reason": "..."}.
+    """
+    # Hard threshold — don't waste an API call on low-engagement posts
+    if engagement < 50:
+        return {"action": "SKIP", "reason": "Engagement below minimum threshold (50)"}
+
+    # Determine the candidate tier for the AI to evaluate
+    if engagement >= 500:
+        tier = "QUOTE"
+        tier_guidance = (
+            "This post has very high engagement (500+). "
+            "Consider QUOTE if the content is insightful and from a notable account — "
+            "worth adding your own technical perspective. "
+            "If not insightful enough for a quote, fall back to REPOST or REPLY."
+        )
+    elif engagement >= 200:
+        tier = "REPOST"
+        tier_guidance = (
+            "This post has strong engagement (200+). "
+            "Consider REPOST if the content is valuable for an AI-focused audience. "
+            "If not valuable enough, fall back to REPLY or SKIP."
+        )
+    else:
+        tier = "REPLY"
+        tier_guidance = (
+            "This post has moderate engagement (50+). "
+            "Consider REPLY if the content is about AI/tech and worth a brief comment. "
+            "Otherwise SKIP."
+        )
+
+    system = """You are an engagement strategist for a senior AI engineer's Twitter/X account.
+Your job is to decide whether a tweet is worth engaging with and how.
+
+Evaluate the tweet on these criteria:
+- Is the content about AI, technology, or a related technical topic?
+- Is it insightful, thought-provoking, or genuinely informative?
+- Would engaging with it look natural for a credible AI professional?
+
+Actions available (in order of investment):
+- QUOTE: Add original technical insight (only for truly exceptional, insightful content)
+- REPOST: Share with followers (valuable content, no comment needed)
+- REPLY: Leave a brief acknowledgment (decent content worth a light touch)
+- SKIP: Not worth engaging (off-topic, low quality, controversial, or promotional spam)
+
+Respond ONLY with valid JSON: {"action": "QUOTE"|"REPOST"|"REPLY"|"SKIP", "reason": "brief explanation"}"""
+
+    user = f"""Tweet snippet:
+{snippet[:600]}
+
+Author info: {author_info}
+Engagement score: {engagement}
+
+{tier_guidance}"""
+
+    try:
+        text = _chat(system, user, MODEL_FAST, 100)
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group())
+            action = data.get("action", "SKIP").upper()
+            if action not in ("REPLY", "REPOST", "QUOTE", "SKIP"):
+                action = "SKIP"
+            return {
+                "action": action,
+                "reason": data.get("reason", ""),
+            }
+    except Exception:
+        pass
+    return {"action": "SKIP", "reason": "AI evaluation failed — defaulting to skip"}
+
+
+def generate_light_reply(snippet: str) -> Optional[str]:
+    """
+    Generates a 1-2 sentence genuine acknowledgment for a home-feed tweet.
+    Uses Haiku for speed/cost. Returns reply text (≤200 chars) or None.
+    """
+    system = """You are a senior AI engineer who occasionally replies to interesting tweets.
+
+Write a brief, genuine reply (1-2 sentences) that acknowledges the insight in the tweet.
+- Sound natural and varied — not templated or generic
+- Be specific to the content when possible
+- NEVER mention any company, product, or anything promotional
+- NEVER use hashtags
+- Keep it under 200 characters
+- Examples of good replies:
+  "Great breakdown of the trade-offs here."
+  "This is exactly the kind of practical insight that's hard to find."
+  "Interesting framing — the latency angle is underappreciated."
+
+If the tweet is not worth replying to, respond with just: SKIP"""
+
+    try:
+        reply = _chat(system, f"Tweet:\n{snippet[:600]}\n\nYour brief reply:", MODEL_FAST, 120)
+
+        if reply.upper().startswith("SKIP") or len(reply) < 10:
+            return None
+
+        # Strip any wrapping quotes the model might add
+        reply = reply.strip('"').strip("'")
+
+        if len(reply) > 200:
+            reply = reply[:197].rsplit(" ", 1)[0] + "..."
+
+        return reply
+    except Exception:
+        return None
+
+
+def generate_quote_insight(snippet: str) -> Optional[str]:
+    """
+    Generates 2-3 sentences of pure technical insight for a quote-tweet.
+    Uses Sonnet for quality. Returns quote text (≤280 chars) or None.
+    NEVER mentions MiroMind, products, or anything promotional.
+    """
+    system = """You are a senior AI engineer sharing a technical perspective on a tweet you're quote-retweeting.
+
+Write 2-3 sentences that ADD genuine technical insight complementing the original post.
+- Offer a perspective, connection, or nuance the original didn't cover
+- Sound like a real practitioner — specific, credible, opinionated
+- MUST NOT mention any company name, product, brand, or anything promotional
+- MUST NOT use hashtags
+- Keep it under 280 characters
+- Be direct — no filler phrases like "Great post!" or "This is so true"
+
+If you cannot add meaningful insight, respond with just: SKIP"""
+
+    try:
+        quote = _chat(
+            system,
+            f"Original tweet:\n{snippet[:600]}\n\nYour technical perspective:",
+            MODEL_QUALITY,
+            200,
+        )
+
+        if quote.upper().startswith("SKIP") or len(quote) < 20:
+            return None
+
+        # Strip any wrapping quotes the model might add
+        quote = quote.strip('"').strip("'")
+
+        if len(quote) > 280:
+            quote = quote[:277].rsplit(" ", 1)[0] + "..."
+
+        return quote
+    except Exception:
+        return None
