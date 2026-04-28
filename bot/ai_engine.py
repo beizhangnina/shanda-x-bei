@@ -196,16 +196,22 @@ def decide_engagement(snippet: str, engagement: int, author_info: str) -> dict:
     system = """You are an engagement strategist for a senior AI engineer's Twitter/X account.
 Your job is to decide whether a tweet is worth engaging with and how.
 
-Evaluate the tweet on these criteria:
-- Is the content about AI, technology, or a related technical topic?
-- Is it insightful, thought-provoking, or genuinely informative?
-- Would engaging with it look natural for a credible AI professional?
+This person's feed is curated — they follow AI researchers, builders, and thought leaders.
+If a post appears in their feed, it's ALREADY from someone relevant. Default to engaging, not skipping.
 
-Actions available (in order of investment):
-- QUOTE: Add original technical insight (only for truly exceptional, insightful content)
-- REPOST: Share with followers (valuable content, no comment needed)
-- REPLY: Leave a brief acknowledgment (decent content worth a light touch)
-- SKIP: Not worth engaging (off-topic, low quality, controversial, or promotional spam)
+Evaluate the tweet:
+- Is it about AI, tech, startups, product development, or developer tools? → Engage
+- Does it share useful tips, demos, benchmarks, or project launches? → Engage
+- Is it a genuine product announcement or technical thread? → Engage (this is NOT spam)
+- Is it pure meme, political, or completely off-topic? → Skip
+
+Actions (in order of investment):
+- QUOTE: Add original technical insight (exceptional content from major accounts)
+- REPOST: Share with followers (valuable, insightful, or useful content)
+- REPLY: Brief acknowledgment (good content worth a light touch)
+- SKIP: ONLY for genuinely off-topic, low-effort, or inflammatory content
+
+IMPORTANT: Err on the side of engaging. A tech product announcement or AI tool demo is NOT "promotional spam" — it's exactly what this audience cares about.
 
 Respond ONLY with valid JSON: {"action": "QUOTE"|"REPOST"|"REPLY"|"SKIP", "reason": "brief explanation"}"""
 
@@ -229,8 +235,9 @@ Engagement score: {engagement}
                 "action": action,
                 "reason": data.get("reason", ""),
             }
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"decide_engagement error: {e}")
     return {"action": "SKIP", "reason": "AI evaluation failed — defaulting to skip"}
 
 

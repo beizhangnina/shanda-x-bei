@@ -288,7 +288,8 @@ def repost_team_accounts(config: dict) -> dict:
     team_accounts = config["x"].get("team_accounts", [])
     max_reposts = config["x"].get("max_daily_reposts", 15)
     max_age_days = config["x"].get("team_max_age_days", 7)
-    delay = config["x"].get("min_delay_seconds", 300)
+    delay_min = config["x"].get("min_repost_delay", 240)
+    delay_max = config["x"].get("max_repost_delay", 420)
 
     summary = {"reposts": 0, "skipped": 0, "errors": 0}
 
@@ -394,9 +395,10 @@ def repost_team_accounts(config: dict) -> dict:
 
                 log_reply("x", tweet_url, account, snippet, f"[REPOST from {account}]", None, "posted")
                 summary["reposts"] += 1
-                logger.info(f"Flow1: reposted {account} — {tweet_url} ({age_days}d old)")
+                delay = random.randint(delay_min, delay_max)
+                logger.info(f"Flow1: reposted {account} — {tweet_url} ({age_days}d old) — waiting {delay}s")
                 B.back()
-                B.wait_seconds(delay)
+                time.sleep(delay)
 
         except Exception as e:
             logger.error(f"Flow1: error on {account}: {e}")
@@ -413,7 +415,8 @@ def search_and_repost_dr(config: dict) -> dict:
     """
     queries = config["x"].get("search_queries", [])
     max_reposts = config["x"].get("max_daily_reposts", 15)
-    delay = config["x"].get("min_delay_seconds", 300)
+    delay_min = config["x"].get("min_repost_delay", 240)
+    delay_max = config["x"].get("max_repost_delay", 420)
 
     # JS to extract tweet URLs + engagement from search results page
     JS_SEARCH_TWEETS = (
@@ -518,7 +521,8 @@ def search_and_repost_dr(config: dict) -> dict:
                         B.wait_seconds(2)
                         log_reply("x", tweet_url, query, snippet, "[DR REPOST]", None, "posted")
                         summary["reposts"] += 1
-                        logger.info(f"Flow2: reposted DR content — {tweet_url}")
+                        delay = random.randint(delay_min, delay_max)
+                        logger.info(f"Flow2: reposted DR content — {tweet_url} — waiting {delay}s")
                         time.sleep(delay)
                     else:
                         B.press("Escape")
@@ -790,25 +794,21 @@ def browse_feed_and_engage(config: dict) -> dict:
         "}).filter(x => x.url && x.datetime)"
     )
 
-    tweets_first = B.eval_js(JS_FEED_TWEETS)
-    if not tweets_first or not isinstance(tweets_first, list):
-        tweets_first = []
-
-    # Step 4: Scroll down, extract more, deduplicate by URL
-    B.scroll(400, 400, 0, -800)
-    B.wait_seconds(3)
-
-    tweets_second = B.eval_js(JS_FEED_TWEETS)
-    if not tweets_second or not isinstance(tweets_second, list):
-        tweets_second = []
-
     seen_urls = set()
     all_tweets = []
-    for tweet in tweets_first + tweets_second:
-        url = tweet.get("url")
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            all_tweets.append(tweet)
+
+    # Scroll through 8 screenfuls via JS (browse scroll doesn't trigger infinite load)
+    for page in range(8):
+        tweets = B.eval_js(JS_FEED_TWEETS)
+        if tweets and isinstance(tweets, list):
+            for t in tweets:
+                url = t.get("url", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_tweets.append(t)
+        if page < 7:
+            B.eval_js("window.scrollBy(0, window.innerHeight * 3)")
+            B.wait_seconds(3)
 
     # Step 5: Parse engagement from metrics string and sort descending
     for tweet in all_tweets:
