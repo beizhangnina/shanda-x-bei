@@ -25,8 +25,12 @@ def _run(args: str, timeout: int = 30) -> dict:
     out = result.stdout.strip()
     if not out:
         return {}
+    # browse CLI may emit DEBUG lines before JSON — extract the JSON part
+    json_start = out.find("{")
+    if json_start == -1:
+        return {"raw": out}
     try:
-        return json.loads(out)
+        return json.loads(out[json_start:])
     except json.JSONDecodeError:
         return {"raw": out}
 
